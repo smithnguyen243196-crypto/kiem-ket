@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Wallet, Receipt, ClipboardCheck, Plus, Trash2, Save, ExternalLink, RotateCcw, ArrowUpCircle, ArrowDownCircle, RefreshCw, Cloud, CloudOff } from "lucide-react";
+import { Wallet, Receipt, ClipboardCheck, Plus, Minus, Trash2, Save, ExternalLink, RotateCcw, ArrowUpCircle, ArrowDownCircle, RefreshCw, Cloud, CloudOff } from "lucide-react";
 
 // ====== Cấu hình ======
 const NOTION_DB_URL = "https://app.notion.com/p/ccbd8855e4b941caa4e3d733ccd18978";
 const TIEN_KET_BO_SUNG = 1000000;
 const DENOMS = [500000, 200000, 100000, 50000, 20000, 10000, 5000, 2000, 1000];
+const QUICK = [10000, 20000, 50000, 100000, 200000, 500000];
 const STORAGE_KEY = "kiemket:state:v1";
 
 // ====== Bảng màu ======
@@ -24,8 +25,8 @@ const fmtDateVN = (iso) => {
   const [y, m, d] = iso.split("-");
   return `${d}/${m}/${y}`;
 };
+const kLabel = (n) => (n >= 1000000 ? `${n / 1000000}tr` : `${n / 1000}K`);
 const emptyBills = () => Object.fromEntries(DENOMS.map((d) => [d, ""]));
-// Chuẩn hoá để so sánh chữ ký phiên (không tính updatedAt)
 const snapOf = (s) =>
   JSON.stringify({
     bills: { ...emptyBills(), ...(s.bills || {}) },
@@ -34,6 +35,62 @@ const snapOf = (s) =>
     startDate: s.startDate || "",
     countDate: s.countDate || "",
   });
+
+// ====== Components dùng chung (đặt ngoài App để ô nhập không bị mất focus) ======
+function Card({ children }) {
+  return <div className="rounded-2xl p-4 sm:p-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>{children}</div>;
+}
+function SectionTitle({ children, noMargin }) {
+  return <h2 className={`text-base font-bold ${noMargin ? "" : "mb-3"}`} style={{ color: C.ink }}>{children}</h2>;
+}
+function TotalBar({ label, value, color, bg, signed }) {
+  return (
+    <div className="mt-4 flex items-center justify-between rounded-xl px-4 py-3" style={{ background: bg }}>
+      <span className="font-semibold text-sm" style={{ color: C.ink }}>{label}</span>
+      <span className="text-xl font-bold tabular-nums" style={{ color }}>{signed && value > 0 ? "+" : ""}{fmt(value)}đ</span>
+    </div>
+  );
+}
+function MiniStat({ label, value, color }) {
+  return (
+    <div className="rounded-xl px-3 py-2.5" style={{ border: `1px solid ${C.line}` }}>
+      <div className="text-xs" style={{ color: C.inkSoft }}>{label}</div>
+      <div className="text-lg font-bold tabular-nums" style={{ color }}>{fmt(value)}đ</div>
+    </div>
+  );
+}
+function Row({ label, value, strong, color, signed }) {
+  return (
+    <div className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.line}` }}>
+      <span className={strong ? "font-bold" : "text-sm"} style={{ color: strong ? C.ink : C.inkSoft }}>{label}</span>
+      <span className={`tabular-nums ${strong ? "text-lg font-bold" : "font-semibold"}`} style={{ color: color || C.ink }}>{signed && value > 0 ? "+" : ""}{fmt(value)}đ</span>
+    </div>
+  );
+}
+function DateField({ label, value, onChange }) {
+  return (
+    <div>
+      <div className="text-xs font-semibold mb-1" style={{ color: C.inkSoft }}>{label}</div>
+      <input type="date" value={value} onChange={(e) => onChange(e.target.value)} className="w-full rounded-lg px-3 py-2 text-sm outline-none" style={{ border: `1px solid ${C.line}`, background: C.paper, color: C.ink }} />
+    </div>
+  );
+}
+function TabBtn({ active, onClick, icon: Icon, label }) {
+  return (
+    <button onClick={onClick} className="flex-1 flex items-center justify-center gap-2 py-3 px-2 text-sm font-semibold transition-all"
+      style={{ color: active ? C.emerald : C.inkSoft, borderBottom: `3px solid ${active ? C.emerald : "transparent"}`, background: active ? C.emeraldSoft : "transparent" }}>
+      <Icon size={18} /><span className="hidden sm:inline">{label}</span>
+    </button>
+  );
+}
+function StepBtn({ onClick, children }) {
+  return (
+    <button onClick={onClick} className="w-9 h-9 shrink-0 flex items-center justify-center rounded-lg font-bold active:scale-95"
+      style={{ border: `1px solid ${C.line}`, background: C.paper, color: C.emerald }}>
+      {children}
+    </button>
+  );
+}
 
 export default function App() {
   const [tab, setTab] = useState("ket");
@@ -44,13 +101,12 @@ export default function App() {
   const [countDate, setCountDate] = useState(todayISO());
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState({ status: "idle", msg: "" });
-  const [syncStatus, setSyncStatus] = useState("idle"); // idle|syncing|synced|offline|error
+  const [syncStatus, setSyncStatus] = useState("idle");
 
   const localUpdatedAt = useRef(0);
   const lastSnapshot = useRef(snapOf({}));
   const pushTimer = useRef(null);
 
-  // Áp dụng một phiên nháp vào state
   const applyDraft = useCallback((s) => {
     setBills({ ...emptyBills(), ...(s.bills || {}) });
     setSlips(Array.isArray(s.slips) ? s.slips : []);
@@ -60,7 +116,6 @@ export default function App() {
     localUpdatedAt.current = s.updatedAt || Date.now();
   }, []);
 
-  // Kéo dữ liệu mới nhất từ đám mây
   const pullFromCloud = useCallback(async ({ silent } = {}) => {
     if (!silent) setSyncStatus("syncing");
     try {
@@ -79,29 +134,21 @@ export default function App() {
     }
   }, [applyDraft]);
 
-  // Đẩy phiên nháp lên đám mây
   const pushToCloud = useCallback(async (draft, snap) => {
     setSyncStatus("syncing");
     try {
-      const res = await fetch("/api/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draft),
-      });
+      const res = await fetch("/api/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
         lastSnapshot.current = snap;
         localUpdatedAt.current = data.updatedAt || Date.now();
         setSyncStatus("synced");
-      } else {
-        setSyncStatus("error");
-      }
+      } else setSyncStatus("error");
     } catch (e) {
       setSyncStatus("offline");
     }
   }, []);
 
-  // Mở app: nạp local trước (tức thì) rồi kéo bản đám mây
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -116,7 +163,6 @@ export default function App() {
     pullFromCloud({ silent: true });
   }, [applyDraft, pullFromCloud]);
 
-  // Quay lại app trên thiết bị khác → tự kéo bản mới nhất
   useEffect(() => {
     const onVisible = () => { if (!document.hidden) pullFromCloud({ silent: true }); };
     window.addEventListener("focus", onVisible);
@@ -127,25 +173,19 @@ export default function App() {
     };
   }, [pullFromCloud]);
 
-  // Mỗi khi state đổi: lưu local ngay + đẩy đám mây (debounce 1.2s)
   useEffect(() => {
     if (!loaded) return;
     const draft = { bills, slips, reported, startDate, countDate };
     const snap = snapOf(draft);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...draft, updatedAt: Date.now() }));
-    } catch (e) { /* bỏ qua */ }
-    if (snap === lastSnapshot.current) return; // không có thay đổi thực sự
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...draft, updatedAt: Date.now() })); } catch (e) {}
+    if (snap === lastSnapshot.current) return;
     clearTimeout(pushTimer.current);
     pushTimer.current = setTimeout(() => pushToCloud(draft, snap), 1200);
     return () => clearTimeout(pushTimer.current);
   }, [bills, slips, reported, startDate, countDate, loaded, pushToCloud]);
 
   // ====== Tính toán ======
-  const tongKet = useMemo(
-    () => DENOMS.reduce((sum, d) => sum + d * (parseInt(onlyDigits(String(bills[d])) || "0", 10) || 0), 0),
-    [bills]
-  );
+  const tongKet = useMemo(() => DENOMS.reduce((sum, d) => sum + d * (parseInt(onlyDigits(String(bills[d])) || "0", 10) || 0), 0), [bills]);
   const tongThu = useMemo(() => slips.filter((s) => s.type === "thu").reduce((a, s) => a + (s.amount || 0), 0), [slips]);
   const tongChi = useMemo(() => slips.filter((s) => s.type === "chi").reduce((a, s) => a + (s.amount || 0), 0), [slips]);
   const netThuChi = tongThu - tongChi;
@@ -156,8 +196,14 @@ export default function App() {
 
   // ====== Hành động ======
   const setBill = (d, v) => setBills((p) => ({ ...p, [d]: onlyDigits(v) }));
+  const stepBill = (d, delta) => setBills((p) => {
+    const cur = parseInt(onlyDigits(String(p[d])) || "0", 10) || 0;
+    const next = Math.max(0, cur + delta);
+    return { ...p, [d]: next === 0 ? "" : String(next) };
+  });
   const addSlip = (type) => setSlips((p) => [...p, { id: Date.now() + Math.random(), type, amount: 0, reason: "" }]);
   const updSlip = (id, patch) => setSlips((p) => p.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  const addToSlip = (id, amt) => setSlips((p) => p.map((s) => (s.id === id ? { ...s, amount: (s.amount || 0) + amt } : s)));
   const delSlip = (id) => setSlips((p) => p.filter((s) => s.id !== id));
 
   const resetAll = () => {
@@ -168,21 +214,17 @@ export default function App() {
 
   const danhSachChiText = useMemo(() => {
     if (slips.length === 0) return "(Không có phiếu thu/chi)";
-    return slips
-      .map((s) => `${s.type === "thu" ? "+" : "−"} ${fmt(s.amount)}đ — ${s.reason?.trim() || "(không ghi lý do)"}`)
-      .join("\n");
+    return slips.map((s) => `${s.type === "thu" ? "+" : "−"} ${fmt(s.amount)}đ — ${s.reason?.trim() || "(không ghi lý do)"}`).join("\n");
   }, [slips]);
 
   const saveToNotion = useCallback(async () => {
     setSaveState({ status: "saving", msg: "Đang lưu vào Notion…" });
     try {
       const res = await fetch("/api/save-ket", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           countDate, startDate, countDateVN: fmtDateVN(countDate),
-          tongKet, netThuChi, ketVaThuChi,
-          reported: reportedNum, ketQua, trangThai, danhSachChi: danhSachChiText,
+          tongKet, netThuChi, ketVaThuChi, reported: reportedNum, ketQua, trangThai, danhSachChi: danhSachChiText,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -193,26 +235,13 @@ export default function App() {
     }
   }, [countDate, startDate, tongKet, netThuChi, ketVaThuChi, reportedNum, ketQua, trangThai, danhSachChiText]);
 
-  // ====== UI con ======
-  const TabBtn = ({ id, icon: Icon, label }) => {
-    const active = tab === id;
-    return (
-      <button onClick={() => setTab(id)}
-        className="flex-1 flex items-center justify-center gap-2 py-3 px-2 text-sm font-semibold transition-all"
-        style={{ color: active ? C.emerald : C.inkSoft, borderBottom: `3px solid ${active ? C.emerald : "transparent"}`, background: active ? C.emeraldSoft : "transparent" }}>
-        <Icon size={18} /><span className="hidden sm:inline">{label}</span>
-      </button>
-    );
-  };
-
   const statusColors = { Khớp: { fg: C.green, bg: C.greenSoft }, Thừa: { fg: C.blue, bg: C.blueSoft }, Thiếu: { fg: C.red, bg: C.redSoft } };
-
   const syncMeta = {
-    idle:    { label: "Đồng bộ", color: C.inkSoft, Icon: Cloud, spin: false },
+    idle: { label: "Đồng bộ", color: C.inkSoft, Icon: Cloud, spin: false },
     syncing: { label: "Đang đồng bộ…", color: C.amber, Icon: RefreshCw, spin: true },
-    synced:  { label: "Đã đồng bộ", color: C.green, Icon: Cloud, spin: false },
+    synced: { label: "Đã đồng bộ", color: C.green, Icon: Cloud, spin: false },
     offline: { label: "Ngoại tuyến", color: C.inkSoft, Icon: CloudOff, spin: false },
-    error:   { label: "Lỗi đồng bộ", color: C.red, Icon: CloudOff, spin: false },
+    error: { label: "Lỗi đồng bộ", color: C.red, Icon: CloudOff, spin: false },
   }[syncStatus];
 
   return (
@@ -225,23 +254,20 @@ export default function App() {
             <p className="text-sm" style={{ color: C.inkSoft }}>Đếm tiền · Thu chi · Đối chiếu báo cáo</p>
           </div>
           <div className="flex flex-col items-end gap-2 shrink-0">
-            <button onClick={() => pullFromCloud()} title="Bấm để đồng bộ ngay"
-              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg"
+            <button onClick={() => pullFromCloud()} title="Bấm để đồng bộ ngay" className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg"
               style={{ color: syncMeta.color, border: `1px solid ${C.line}`, background: C.card }}>
-              <syncMeta.Icon size={14} style={syncMeta.spin ? { animation: "spin 1s linear infinite" } : undefined} />
-              {syncMeta.label}
+              <syncMeta.Icon size={14} style={syncMeta.spin ? { animation: "spin 1s linear infinite" } : undefined} />{syncMeta.label}
             </button>
-            <button onClick={resetAll} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg"
-              style={{ color: C.inkSoft, border: `1px solid ${C.line}`, background: C.card }}>
+            <button onClick={resetAll} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg" style={{ color: C.inkSoft, border: `1px solid ${C.line}`, background: C.card }}>
               <RotateCcw size={14} /> Phiên mới
             </button>
           </div>
         </div>
 
         <div className="flex rounded-xl overflow-hidden mt-4 mb-5" style={{ border: `1px solid ${C.line}`, background: C.card }}>
-          <TabBtn id="ket" icon={Wallet} label="Đếm két" />
-          <TabBtn id="thuchi" icon={Receipt} label="Thu chi" />
-          <TabBtn id="ketqua" icon={ClipboardCheck} label="Kết quả" />
+          <TabBtn active={tab === "ket"} onClick={() => setTab("ket")} icon={Wallet} label="Đếm két" />
+          <TabBtn active={tab === "thuchi"} onClick={() => setTab("thuchi")} icon={Receipt} label="Thu chi" />
+          <TabBtn active={tab === "ketqua"} onClick={() => setTab("ketqua")} icon={ClipboardCheck} label="Kết quả" />
         </div>
 
         {tab === "ket" && (
@@ -252,13 +278,13 @@ export default function App() {
                 const count = parseInt(onlyDigits(String(bills[d])) || "0", 10) || 0;
                 const sub = d * count;
                 return (
-                  <div key={d} className="flex items-center gap-3 py-2" style={{ borderBottom: `1px solid ${C.line}` }}>
-                    <div className="w-24 text-right font-bold tabular-nums shrink-0" style={{ color: C.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(d)}đ</div>
-                    <span style={{ color: C.inkSoft }}>×</span>
+                  <div key={d} className="flex items-center gap-2 py-2" style={{ borderBottom: `1px solid ${C.line}` }}>
+                    <div className="w-20 text-right font-bold tabular-nums shrink-0 text-sm" style={{ color: C.ink }}>{fmt(d)}đ</div>
+                    <StepBtn onClick={() => stepBill(d, -1)}><Minus size={16} /></StepBtn>
                     <input inputMode="numeric" value={bills[d]} onChange={(e) => setBill(d, e.target.value)} placeholder="0"
-                      className="w-20 text-center rounded-lg py-1.5 font-semibold outline-none" style={{ border: `1px solid ${C.line}`, background: C.paper, color: C.ink }} />
-                    <span style={{ color: C.inkSoft }}>=</span>
-                    <div className="flex-1 text-right font-semibold tabular-nums" style={{ color: sub ? C.emerald : C.inkSoft, fontVariantNumeric: "tabular-nums" }}>{fmt(sub)}đ</div>
+                      className="w-14 text-center rounded-lg py-1.5 font-semibold outline-none" style={{ border: `1px solid ${C.line}`, background: C.paper, color: C.ink }} />
+                    <StepBtn onClick={() => stepBill(d, 1)}><Plus size={16} /></StepBtn>
+                    <div className="flex-1 text-right font-semibold tabular-nums text-sm" style={{ color: sub ? C.emerald : C.inkSoft }}>{fmt(sub)}đ</div>
                   </div>
                 );
               })}
@@ -275,17 +301,30 @@ export default function App() {
               <button onClick={() => addSlip("chi")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-semibold text-sm" style={{ background: C.redSoft, color: C.red }}><Plus size={16} /> Phiếu chi (−)</button>
             </div>
             {slips.length === 0 && <p className="text-center py-8 text-sm" style={{ color: C.inkSoft }}>Chưa có phiếu nào. Thêm phiếu thu hoặc chi ở trên.</p>}
-            <div className="space-y-2">
+            <div className="space-y-3">
               {slips.map((s) => {
                 const isThu = s.type === "thu";
+                const accent = isThu ? C.green : C.red;
                 return (
-                  <div key={s.id} className="flex items-center gap-2 p-2 rounded-lg" style={{ background: isThu ? C.greenSoft : C.redSoft }}>
-                    {isThu ? <ArrowUpCircle size={20} style={{ color: C.green }} className="shrink-0" /> : <ArrowDownCircle size={20} style={{ color: C.red }} className="shrink-0" />}
-                    <input inputMode="numeric" value={s.amount ? fmt(s.amount) : ""} onChange={(e) => updSlip(s.id, { amount: parseInt(onlyDigits(e.target.value) || "0", 10) || 0 })} placeholder="Số tiền"
-                      className="w-28 rounded-md px-2 py-1.5 font-semibold tabular-nums outline-none" style={{ border: `1px solid ${C.line}`, background: C.card, color: isThu ? C.green : C.red }} />
+                  <div key={s.id} className="rounded-xl p-3" style={{ background: isThu ? C.greenSoft : C.redSoft }}>
+                    <div className="flex items-center gap-2">
+                      {isThu ? <ArrowUpCircle size={20} style={{ color: accent }} className="shrink-0" /> : <ArrowDownCircle size={20} style={{ color: accent }} className="shrink-0" />}
+                      <input inputMode="numeric" value={s.amount ? fmt(s.amount) : ""} onChange={(e) => updSlip(s.id, { amount: parseInt(onlyDigits(e.target.value) || "0", 10) || 0 })} placeholder="Số tiền"
+                        className="flex-1 rounded-md px-2 py-1.5 font-bold tabular-nums outline-none" style={{ border: `1px solid ${C.line}`, background: C.card, color: accent }} />
+                      <button onClick={() => delSlip(s.id)} className="p-1.5 shrink-0" style={{ color: C.inkSoft }}><Trash2 size={16} /></button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {QUICK.map((q) => (
+                        <button key={q} onClick={() => addToSlip(s.id, q)} className="px-2.5 py-1 rounded-md text-xs font-bold active:scale-95" style={{ background: C.card, color: accent, border: `1px solid ${C.line}` }}>
+                          +{kLabel(q)}
+                        </button>
+                      ))}
+                      <button onClick={() => updSlip(s.id, { amount: 0 })} className="px-2.5 py-1 rounded-md text-xs font-semibold active:scale-95" style={{ background: "transparent", color: C.inkSoft, border: `1px solid ${C.line}` }}>
+                        Xoá số
+                      </button>
+                    </div>
                     <input value={s.reason} onChange={(e) => updSlip(s.id, { reason: e.target.value })} placeholder={isThu ? "Lý do thu" : "Lý do chi"}
-                      className="flex-1 rounded-md px-2 py-1.5 text-sm outline-none" style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }} />
-                    <button onClick={() => delSlip(s.id)} className="p-1.5 shrink-0" style={{ color: C.inkSoft }}><Trash2 size={16} /></button>
+                      className="w-full rounded-md px-2 py-1.5 text-sm outline-none mt-2" style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }} />
                   </div>
                 );
               })}
@@ -335,19 +374,4 @@ export default function App() {
       </div>
     </div>
   );
-
-  function Card({ children }) { return <div className="rounded-2xl p-4 sm:p-5" style={{ background: C.card, border: `1px solid ${C.line}` }}>{children}</div>; }
-  function SectionTitle({ children, noMargin }) { return <h2 className={`text-base font-bold ${noMargin ? "" : "mb-3"}`} style={{ color: C.ink }}>{children}</h2>; }
-  function TotalBar({ label, value, color, bg, signed }) {
-    return (<div className="mt-4 flex items-center justify-between rounded-xl px-4 py-3" style={{ background: bg }}><span className="font-semibold text-sm" style={{ color: C.ink }}>{label}</span><span className="text-xl font-bold tabular-nums" style={{ color }}>{signed && value > 0 ? "+" : ""}{fmt(value)}đ</span></div>);
-  }
-  function MiniStat({ label, value, color }) {
-    return (<div className="rounded-xl px-3 py-2.5" style={{ border: `1px solid ${C.line}` }}><div className="text-xs" style={{ color: C.inkSoft }}>{label}</div><div className="text-lg font-bold tabular-nums" style={{ color }}>{fmt(value)}đ</div></div>);
-  }
-  function Row({ label, value, strong, color, signed }) {
-    return (<div className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.line}` }}><span className={strong ? "font-bold" : "text-sm"} style={{ color: strong ? C.ink : C.inkSoft }}>{label}</span><span className={`tabular-nums ${strong ? "text-lg font-bold" : "font-semibold"}`} style={{ color: color || C.ink }}>{signed && value > 0 ? "+" : ""}{fmt(value)}đ</span></div>);
-  }
-  function DateField({ label, value, onChange }) {
-    return (<div><div className="text-xs font-semibold mb-1" style={{ color: C.inkSoft }}>{label}</div><input type="date" value={value} onChange={(e) => onChange(e.target.value)} className="w-full rounded-lg px-3 py-2 text-sm outline-none" style={{ border: `1px solid ${C.line}`, background: C.paper, color: C.ink }} /></div>);
-  }
 }
