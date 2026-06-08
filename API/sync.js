@@ -1,15 +1,19 @@
 // api/sync.js — Đồng bộ "phiên nháp" giữa các thiết bị qua Upstash Redis
-// GET  /api/sync        → trả về phiên nháp đang lưu trên đám mây
-// POST /api/sync        → lưu phiên nháp (body JSON) lên đám mây
+// GET  /api/sync   → trả về phiên nháp đang lưu trên đám mây
+// POST /api/sync   → lưu phiên nháp (body JSON) lên đám mây
 //
-// Cần 2 biến môi trường trên Vercel:
-//   UPSTASH_REDIS_REST_URL
-//   UPSTASH_REDIS_REST_TOKEN
+// Hỗ trợ cả 2 kiểu tên biến môi trường:
+//   - Vercel Marketplace (Upstash): KV_REST_API_URL, KV_REST_API_TOKEN
+//   - Upstash trực tiếp:            UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
 
 import { Redis } from "@upstash/redis";
 
 const KEY = "kiemket:draft"; // một người dùng → một phiên nháp dùng chung
-const redis = Redis.fromEnv();
+
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
 export default async function handler(req, res) {
   try {
