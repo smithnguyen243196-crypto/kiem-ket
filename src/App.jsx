@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Wallet, Receipt, ClipboardCheck, Plus, Minus, Trash2, Save, ExternalLink, RotateCcw, ArrowUpCircle, ArrowDownCircle, RefreshCw, Cloud, CloudOff } from "lucide-react";
+import { Wallet, Receipt, ClipboardCheck, Plus, Minus, Trash2, Save, ExternalLink, RotateCcw, ArrowUpCircle, ArrowDownCircle, RefreshCw, Cloud, CloudOff, Check, Pencil, X } from "lucide-react";
 
 // ====== Cấu hình ======
 const NOTION_DB_URL = "https://app.notion.com/p/ccbd8855e4b941caa4e3d733ccd18978";
@@ -96,6 +96,7 @@ export default function App() {
   const [tab, setTab] = useState("ket");
   const [bills, setBills] = useState(emptyBills);
   const [slips, setSlips] = useState([]);
+  const [draft, setDraft] = useState(null); // phiếu đang nhập/sửa, chưa lưu
   const [reported, setReported] = useState("");
   const [startDate, setStartDate] = useState(todayISO());
   const [countDate, setCountDate] = useState(todayISO());
@@ -134,10 +135,10 @@ export default function App() {
     }
   }, [applyDraft]);
 
-  const pushToCloud = useCallback(async (draft, snap) => {
+  const pushToCloud = useCallback(async (d, snap) => {
     setSyncStatus("syncing");
     try {
-      const res = await fetch("/api/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
+      const res = await fetch("/api/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(d) });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
         lastSnapshot.current = snap;
@@ -175,16 +176,16 @@ export default function App() {
 
   useEffect(() => {
     if (!loaded) return;
-    const draft = { bills, slips, reported, startDate, countDate };
-    const snap = snapOf(draft);
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...draft, updatedAt: Date.now() })); } catch (e) {}
+    const d = { bills, slips, reported, startDate, countDate };
+    const snap = snapOf(d);
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...d, updatedAt: Date.now() })); } catch (e) {}
     if (snap === lastSnapshot.current) return;
     clearTimeout(pushTimer.current);
-    pushTimer.current = setTimeout(() => pushToCloud(draft, snap), 1200);
+    pushTimer.current = setTimeout(() => pushToCloud(d, snap), 1200);
     return () => clearTimeout(pushTimer.current);
   }, [bills, slips, reported, startDate, countDate, loaded, pushToCloud]);
 
-  // ====== Tính toán ======
+  // ====== Tính toán (chỉ tính phiếu ĐÃ LƯU) ======
   const tongKet = useMemo(() => DENOMS.reduce((sum, d) => sum + d * (parseInt(onlyDigits(String(bills[d])) || "0", 10) || 0), 0), [bills]);
   const tongThu = useMemo(() => slips.filter((s) => s.type === "thu").reduce((a, s) => a + (s.amount || 0), 0), [slips]);
   const tongChi = useMemo(() => slips.filter((s) => s.type === "chi").reduce((a, s) => a + (s.amount || 0), 0), [slips]);
@@ -201,14 +202,22 @@ export default function App() {
     const next = Math.max(0, cur + delta);
     return { ...p, [d]: next === 0 ? "" : String(next) };
   });
-  const addSlip = (type) => setSlips((p) => [...p, { id: Date.now() + Math.random(), type, amount: 0, reason: "" }]);
-  const updSlip = (id, patch) => setSlips((p) => p.map((s) => (s.id === id ? { ...s, ...patch } : s)));
-  const addToSlip = (id, amt) => setSlips((p) => p.map((s) => (s.id === id ? { ...s, amount: (s.amount || 0) + amt } : s)));
-  const delSlip = (id) => setSlips((p) => p.filter((s) => s.id !== id));
+
+  const openNew = (type) => setDraft({ editId: null, type, amount: 0, reason: "" });
+  const editSlip = (s) => setDraft({ editId: s.id, type: s.type, amount: s.amount, reason: s.reason });
+  const saveDraft = () => {
+    if (!draft || !draft.amount) return;
+    setSlips((prev) => {
+      if (draft.editId != null) return prev.map((s) => (s.id === draft.editId ? { ...s, type: draft.type, amount: draft.amount, reason: draft.reason } : s));
+      return [...prev, { id: Date.now() + Math.random(), type: draft.type, amount: draft.amount, reason: draft.reason }];
+    });
+    setDraft(null);
+  };
+  const removeSlip = (id) => { if (window.confirm("Xoá phiếu này?")) setSlips((p) => p.filter((s) => s.id !== id)); };
 
   const resetAll = () => {
     if (!window.confirm("Bắt đầu phiên kiểm két mới? Toàn bộ số liệu hiện tại (trên mọi thiết bị) sẽ bị xoá.")) return;
-    setBills(emptyBills()); setSlips([]); setReported(""); setStartDate(todayISO()); setCountDate(todayISO());
+    setBills(emptyBills()); setSlips([]); setDraft(null); setReported(""); setStartDate(todayISO()); setCountDate(todayISO());
     setSaveState({ status: "idle", msg: "" });
   };
 
@@ -243,6 +252,9 @@ export default function App() {
     offline: { label: "Ngoại tuyến", color: C.inkSoft, Icon: CloudOff, spin: false },
     error: { label: "Lỗi đồng bộ", color: C.red, Icon: CloudOff, spin: false },
   }[syncStatus];
+
+  const dAccent = draft && draft.type === "thu" ? C.green : C.red;
+  const visibleSlips = slips.filter((s) => !draft || s.id !== draft.editId);
 
   return (
     <div style={{ background: C.paper, minHeight: "100vh", color: C.ink }} className="w-full">
@@ -296,39 +308,63 @@ export default function App() {
         {tab === "thuchi" && (
           <Card>
             <SectionTitle noMargin>Thu chi hằng ngày</SectionTitle>
-            <div className="flex gap-2 my-4">
-              <button onClick={() => addSlip("thu")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-semibold text-sm" style={{ background: C.greenSoft, color: C.green }}><Plus size={16} /> Phiếu thu (+)</button>
-              <button onClick={() => addSlip("chi")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-semibold text-sm" style={{ background: C.redSoft, color: C.red }}><Plus size={16} /> Phiếu chi (−)</button>
-            </div>
-            {slips.length === 0 && <p className="text-center py-8 text-sm" style={{ color: C.inkSoft }}>Chưa có phiếu nào. Thêm phiếu thu hoặc chi ở trên.</p>}
-            <div className="space-y-3">
-              {slips.map((s) => {
+
+            {/* Nút mở phiếu mới (ẩn khi đang nhập) */}
+            {!draft && (
+              <div className="flex gap-2 my-4">
+                <button onClick={() => openNew("thu")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-semibold text-sm" style={{ background: C.greenSoft, color: C.green }}><Plus size={16} /> Phiếu thu (+)</button>
+                <button onClick={() => openNew("chi")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-semibold text-sm" style={{ background: C.redSoft, color: C.red }}><Plus size={16} /> Phiếu chi (−)</button>
+              </div>
+            )}
+
+            {/* Khu vực nhập phiếu (bấm Lưu mới cộng tiền) */}
+            {draft && (
+              <div className="rounded-xl p-3 my-4" style={{ background: draft.type === "thu" ? C.greenSoft : C.redSoft, border: `2px solid ${dAccent}` }}>
+                <div className="flex items-center gap-2 mb-2">
+                  {draft.type === "thu" ? <ArrowUpCircle size={18} style={{ color: dAccent }} /> : <ArrowDownCircle size={18} style={{ color: dAccent }} />}
+                  <span className="text-sm font-bold" style={{ color: dAccent }}>
+                    {draft.editId != null ? "Sửa phiếu" : draft.type === "thu" ? "Phiếu thu mới" : "Phiếu chi mới"}
+                  </span>
+                </div>
+                <input inputMode="numeric" autoFocus value={draft.amount ? fmt(draft.amount) : ""} onChange={(e) => setDraft((d) => ({ ...d, amount: parseInt(onlyDigits(e.target.value) || "0", 10) || 0 }))} placeholder="Số tiền"
+                  className="w-full rounded-md px-3 py-2 font-bold text-lg tabular-nums outline-none" style={{ border: `1px solid ${C.line}`, background: C.card, color: dAccent }} />
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {QUICK.map((q) => (
+                    <button key={q} onClick={() => setDraft((d) => ({ ...d, amount: (d.amount || 0) + q }))} className="px-2.5 py-1 rounded-md text-xs font-bold active:scale-95" style={{ background: C.card, color: dAccent, border: `1px solid ${C.line}` }}>+{kLabel(q)}</button>
+                  ))}
+                  <button onClick={() => setDraft((d) => ({ ...d, amount: 0 }))} className="px-2.5 py-1 rounded-md text-xs font-semibold active:scale-95" style={{ background: "transparent", color: C.inkSoft, border: `1px solid ${C.line}` }}>Xoá số</button>
+                </div>
+                <input value={draft.reason} onChange={(e) => setDraft((d) => ({ ...d, reason: e.target.value }))} placeholder={draft.type === "thu" ? "Lý do thu" : "Lý do chi"}
+                  className="w-full rounded-md px-3 py-2 text-sm outline-none mt-2" style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }} />
+                <div className="flex gap-2 mt-3">
+                  <button onClick={saveDraft} disabled={!draft.amount} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-bold text-white active:scale-95" style={{ background: dAccent, opacity: draft.amount ? 1 : 0.5 }}>
+                    <Check size={18} /> Lưu phiếu
+                  </button>
+                  <button onClick={() => setDraft(null)} className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg font-semibold" style={{ background: C.card, color: C.inkSoft, border: `1px solid ${C.line}` }}>
+                    <X size={16} /> Huỷ
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Danh sách phiếu đã lưu */}
+            {visibleSlips.length === 0 && !draft && <p className="text-center py-8 text-sm" style={{ color: C.inkSoft }}>Chưa có phiếu nào. Thêm phiếu thu hoặc chi ở trên.</p>}
+            <div className="space-y-2">
+              {visibleSlips.map((s) => {
                 const isThu = s.type === "thu";
                 const accent = isThu ? C.green : C.red;
                 return (
-                  <div key={s.id} className="rounded-xl p-3" style={{ background: isThu ? C.greenSoft : C.redSoft }}>
-                    <div className="flex items-center gap-2">
-                      {isThu ? <ArrowUpCircle size={20} style={{ color: accent }} className="shrink-0" /> : <ArrowDownCircle size={20} style={{ color: accent }} className="shrink-0" />}
-                      <input inputMode="numeric" value={s.amount ? fmt(s.amount) : ""} onChange={(e) => updSlip(s.id, { amount: parseInt(onlyDigits(e.target.value) || "0", 10) || 0 })} placeholder="Số tiền"
-                        className="flex-1 rounded-md px-2 py-1.5 font-bold tabular-nums outline-none" style={{ border: `1px solid ${C.line}`, background: C.card, color: accent }} />
-                      <button onClick={() => delSlip(s.id)} className="p-1.5 shrink-0" style={{ color: C.inkSoft }}><Trash2 size={16} /></button>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {QUICK.map((q) => (
-                        <button key={q} onClick={() => addToSlip(s.id, q)} className="px-2.5 py-1 rounded-md text-xs font-bold active:scale-95" style={{ background: C.card, color: accent, border: `1px solid ${C.line}` }}>
-                          +{kLabel(q)}
-                        </button>
-                      ))}
-                      <button onClick={() => updSlip(s.id, { amount: 0 })} className="px-2.5 py-1 rounded-md text-xs font-semibold active:scale-95" style={{ background: "transparent", color: C.inkSoft, border: `1px solid ${C.line}` }}>
-                        Xoá số
-                      </button>
-                    </div>
-                    <input value={s.reason} onChange={(e) => updSlip(s.id, { reason: e.target.value })} placeholder={isThu ? "Lý do thu" : "Lý do chi"}
-                      className="w-full rounded-md px-2 py-1.5 text-sm outline-none mt-2" style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }} />
+                  <div key={s.id} className="flex items-center gap-2 p-2.5 rounded-lg" style={{ background: isThu ? C.greenSoft : C.redSoft }}>
+                    {isThu ? <ArrowUpCircle size={18} style={{ color: accent }} className="shrink-0" /> : <ArrowDownCircle size={18} style={{ color: accent }} className="shrink-0" />}
+                    <span className="font-bold tabular-nums shrink-0" style={{ color: accent }}>{isThu ? "+" : "−"}{fmt(s.amount)}đ</span>
+                    <span className="flex-1 text-sm truncate" style={{ color: s.reason ? C.ink : C.inkSoft }}>{s.reason || "(không ghi lý do)"}</span>
+                    <button onClick={() => editSlip(s)} className="flex items-center gap-1 text-xs font-semibold px-2 py-1.5 rounded-md shrink-0" style={{ color: C.emerald, background: C.card, border: `1px solid ${C.line}` }}><Pencil size={13} /> Sửa</button>
+                    <button onClick={() => removeSlip(s.id)} className="flex items-center gap-1 text-xs font-semibold px-2 py-1.5 rounded-md shrink-0" style={{ color: C.red, background: C.card, border: `1px solid ${C.line}` }}><Trash2 size={13} /> Xoá</button>
                   </div>
                 );
               })}
             </div>
+
             <div className="grid grid-cols-2 gap-3 mt-4">
               <MiniStat label="Tổng thu" value={tongThu} color={C.green} />
               <MiniStat label="Tổng chi" value={tongChi} color={C.red} />
