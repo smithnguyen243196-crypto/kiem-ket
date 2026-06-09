@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Wallet, Receipt, ClipboardCheck, Plus, Minus, Trash2, Save, ExternalLink, RotateCcw, ArrowUpCircle, ArrowDownCircle, RefreshCw, Cloud, CloudOff, Check, Pencil, X } from "lucide-react";
+import { Wallet, Receipt, ClipboardCheck, Plus, Minus, Trash2, Save, ExternalLink, RotateCcw, ArrowUpCircle, ArrowDownCircle, RefreshCw, Cloud, CloudOff, Check, Pencil, X, Download } from "lucide-react";
 
 // ====== Cấu hình ======
 const NOTION_DB_URL = "https://app.notion.com/p/ccbd8855e4b941caa4e3d733ccd18978";
 const TIEN_KET_BO_SUNG = 1000000;
 const DENOMS = [500000, 200000, 100000, 50000, 20000, 10000, 5000, 2000, 1000];
 const QUICK = [10000, 20000, 50000, 100000, 200000, 500000];
+const NGUOI = ["anh Tài", "Hải", "anh Thắng", "Gin", "Như Ý", "chị Hân", "Tiên", "Đô", "Uyên"];
 const STORAGE_KEY = "kiemket:state:v1";
 
 // ====== Bảng màu ======
@@ -209,17 +210,39 @@ export default function App() {
     return { ...p, [d]: next === 0 ? "" : String(next) };
   });
 
-  const openNew = (type) => setDraft({ editId: null, type, amount: 0, reason: "" });
-  const editSlip = (s) => setDraft({ editId: s.id, type: s.type, amount: s.amount, reason: s.reason });
+  const openNew = (type) => setDraft({ editId: null, type, amount: 0, reason: "", nguoiDua: "", nguoiNhan: "" });
+  const editSlip = (s) => setDraft({ editId: s.id, type: s.type, amount: s.amount, reason: s.reason, nguoiDua: s.nguoiDua || "", nguoiNhan: s.nguoiNhan || "" });
   const saveDraft = () => {
     if (!draft || !draft.amount) return;
+    const fields = { type: draft.type, amount: draft.amount, reason: draft.reason, nguoiDua: draft.nguoiDua || "", nguoiNhan: draft.nguoiNhan || "" };
     setSlips((prev) => {
-      if (draft.editId != null) return prev.map((s) => (s.id === draft.editId ? { ...s, type: draft.type, amount: draft.amount, reason: draft.reason } : s));
-      return [...prev, { id: Date.now() + Math.random(), type: draft.type, amount: draft.amount, reason: draft.reason, createdAt: Date.now() }];
+      if (draft.editId != null) return prev.map((s) => (s.id === draft.editId ? { ...s, ...fields } : s));
+      return [...prev, { id: Date.now() + Math.random(), ...fields, createdAt: Date.now() }];
     });
     setDraft(null);
   };
   const removeSlip = (id) => { if (window.confirm("Xoá phiếu này?")) setSlips((p) => p.filter((s) => s.id !== id)); };
+
+  const exportCSV = () => {
+    if (slips.length === 0) { window.alert("Chưa có phiếu nào để xuất."); return; }
+    const cell = (v) => (typeof v === "number" ? String(v) : `"${String(v ?? "").replace(/"/g, '""')}"`);
+    const head = ["STT", "Giờ", "Ngày", "Loại", "Số tiền (đ)", "Lý do", "Người đưa", "Người nhận"];
+    const rows = slips.map((s, i) => {
+      const dt = s.createdAt ? new Date(s.createdAt) : null;
+      const gio = dt ? `${pad2(dt.getHours())}:${pad2(dt.getMinutes())}` : "";
+      const ngay = dt ? `${pad2(dt.getDate())}/${pad2(dt.getMonth() + 1)}/${dt.getFullYear()}` : "";
+      return [i + 1, gio, ngay, s.type === "thu" ? "Thu" : "Chi", s.amount || 0, s.reason || "", s.nguoiDua || "", s.nguoiNhan || ""];
+    });
+    const foot = [[], ["", "", "", "Tổng thu", tongThu], ["", "", "", "Tổng chi", tongChi], ["", "", "", "Tổng thu chi (thu - chi)", netThuChi]];
+    const csv = "\uFEFF" + [head, ...rows, ...foot].map((r) => r.map(cell).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `thu-chi_${countDate || todayISO()}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const resetAll = () => {
     if (!window.confirm("Bắt đầu phiên kiểm két mới? Toàn bộ số liệu hiện tại (trên mọi thiết bị) sẽ bị xoá.")) return;
@@ -229,7 +252,10 @@ export default function App() {
 
   const danhSachChiText = useMemo(() => {
     if (slips.length === 0) return "(Không có phiếu thu/chi)";
-    return slips.map((s) => `${s.createdAt ? fmtDateTime(s.createdAt) + " — " : ""}${s.type === "thu" ? "+" : "−"} ${fmt(s.amount)}đ — ${s.reason?.trim() || "(không ghi lý do)"}`).join("\n");
+    return slips.map((s) => {
+      const who = [s.nguoiDua ? `Đưa: ${s.nguoiDua}` : null, s.nguoiNhan ? `Nhận: ${s.nguoiNhan}` : null].filter(Boolean).join(", ");
+      return `${s.createdAt ? fmtDateTime(s.createdAt) + " — " : ""}${s.type === "thu" ? "+" : "−"} ${fmt(s.amount)}đ — ${s.reason?.trim() || "(không ghi lý do)"}${who ? " (" + who + ")" : ""}`;
+    }).join("\n");
   }, [slips]);
 
   const saveToNotion = useCallback(async () => {
@@ -343,6 +369,13 @@ export default function App() {
                 </div>
                 <input value={draft.reason} onChange={(e) => setDraft((d) => ({ ...d, reason: e.target.value }))} placeholder={draft.type === "thu" ? "Lý do thu" : "Lý do chi"}
                   className="w-full rounded-md px-3 py-2 text-sm outline-none mt-2" style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }} />
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <input list="ds-nguoi" value={draft.nguoiDua} onChange={(e) => setDraft((d) => ({ ...d, nguoiDua: e.target.value }))} placeholder="Người đưa"
+                    className="rounded-md px-3 py-2 text-sm outline-none" style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }} />
+                  <input list="ds-nguoi" value={draft.nguoiNhan} onChange={(e) => setDraft((d) => ({ ...d, nguoiNhan: e.target.value }))} placeholder="Người nhận"
+                    className="rounded-md px-3 py-2 text-sm outline-none" style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }} />
+                </div>
+                <datalist id="ds-nguoi">{NGUOI.map((n) => <option key={n} value={n} />)}</datalist>
                 <div className="flex gap-2 mt-3">
                   <button onClick={saveDraft} disabled={!draft.amount} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-bold text-white active:scale-95" style={{ background: dAccent, opacity: draft.amount ? 1 : 0.5 }}>
                     <Check size={18} /> Lưu phiếu
@@ -356,17 +389,18 @@ export default function App() {
 
             {/* Danh sách phiếu đã lưu */}
             {visibleSlips.length === 0 && !draft && <p className="text-center py-8 text-sm" style={{ color: C.inkSoft }}>Chưa có phiếu nào. Thêm phiếu thu hoặc chi ở trên.</p>}
-            <div className="space-y-2">
+            <div className="space-y-2 overflow-y-auto pr-1" style={{ maxHeight: 460 }}>
               {[...visibleSlips].reverse().map((s) => {
                 const isThu = s.type === "thu";
                 const accent = isThu ? C.green : C.red;
+                const meta = [s.createdAt ? fmtDateTime(s.createdAt) : null, s.nguoiDua ? `Đưa: ${s.nguoiDua}` : null, s.nguoiNhan ? `Nhận: ${s.nguoiNhan}` : null].filter(Boolean).join("  ·  ");
                 return (
                   <div key={s.id} className="flex items-center gap-2 p-2.5 rounded-lg" style={{ background: isThu ? C.greenSoft : C.redSoft }}>
                     {isThu ? <ArrowUpCircle size={18} style={{ color: accent }} className="shrink-0" /> : <ArrowDownCircle size={18} style={{ color: accent }} className="shrink-0" />}
-                    <span className="font-bold tabular-nums shrink-0" style={{ color: accent }}>{isThu ? "+" : "−"}{fmt(s.amount)}đ</span>
+                    <span className="w-28 text-right font-bold tabular-nums shrink-0" style={{ color: accent }}>{isThu ? "+" : "−"}{fmt(s.amount)}đ</span>
                     <div className="flex-1 min-w-0">
                       <div className="text-sm truncate" style={{ color: s.reason ? C.ink : C.inkSoft }}>{s.reason || "(không ghi lý do)"}</div>
-                      {s.createdAt && <div className="text-xs tabular-nums" style={{ color: C.inkSoft }}>{fmtDateTime(s.createdAt)}</div>}
+                      {meta && <div className="text-xs tabular-nums truncate" style={{ color: C.inkSoft }}>{meta}</div>}
                     </div>
                     <button onClick={() => editSlip(s)} className="flex items-center gap-1 text-xs font-semibold px-2 py-1.5 rounded-md shrink-0" style={{ color: C.emerald, background: C.card, border: `1px solid ${C.line}` }}><Pencil size={13} /> Sửa</button>
                     <button onClick={() => removeSlip(s.id)} className="flex items-center gap-1 text-xs font-semibold px-2 py-1.5 rounded-md shrink-0" style={{ color: C.red, background: C.card, border: `1px solid ${C.line}` }}><Trash2 size={13} /> Xoá</button>
@@ -380,7 +414,9 @@ export default function App() {
               <MiniStat label="Tổng chi" value={tongChi} color={C.red} />
             </div>
             <TotalBar label="Tổng thu chi (thu − chi)" value={netThuChi} color={netThuChi >= 0 ? C.green : C.red} bg={netThuChi >= 0 ? C.greenSoft : C.redSoft} signed />
-          </Card>
+            <button onClick={exportCSV} className="w-full mt-3 flex items-center justify-center gap-2 py-2.5 rounded-lg font-semibold text-sm" style={{ background: C.card, color: C.emerald, border: `1px solid ${C.emerald}` }}>
+              <Download size={16} /> Xuất danh sách (CSV)
+            </button>
         )}
 
         {tab === "ketqua" && (
