@@ -417,6 +417,7 @@ export default function App() {
             <button onClick={exportCSV} className="w-full mt-3 flex items-center justify-center gap-2 py-2.5 rounded-lg font-semibold text-sm" style={{ background: C.card, color: C.emerald, border: `1px solid ${C.emerald}` }}>
               <Download size={16} /> Xuất danh sách (CSV)
             </button>
+          </Card>
         )}
 
         {tab === "ketqua" && (
