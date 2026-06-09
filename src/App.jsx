@@ -25,6 +25,12 @@ const fmtDateVN = (iso) => {
   const [y, m, d] = iso.split("-");
   return `${d}/${m}/${y}`;
 };
+const pad2 = (n) => String(n).padStart(2, "0");
+const fmtDateTime = (ts) => {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())} · ${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+};
 const kLabel = (n) => (n >= 1000000 ? `${n / 1000000}tr` : `${n / 1000}K`);
 const emptyBills = () => Object.fromEntries(DENOMS.map((d) => [d, ""]));
 const snapOf = (s) =>
@@ -190,7 +196,7 @@ export default function App() {
   const tongThu = useMemo(() => slips.filter((s) => s.type === "thu").reduce((a, s) => a + (s.amount || 0), 0), [slips]);
   const tongChi = useMemo(() => slips.filter((s) => s.type === "chi").reduce((a, s) => a + (s.amount || 0), 0), [slips]);
   const netThuChi = tongThu - tongChi;
-  const ketVaThuChi = tongKet + netThuChi;
+  const ketVaThuChi = tongKet - netThuChi;
   const reportedNum = parseInt(onlyDigits(String(reported)) || "0", 10) || 0;
   const ketQua = ketVaThuChi - reportedNum - TIEN_KET_BO_SUNG;
   const trangThai = ketQua === 0 ? "Khớp" : ketQua > 0 ? "Thừa" : "Thiếu";
@@ -209,7 +215,7 @@ export default function App() {
     if (!draft || !draft.amount) return;
     setSlips((prev) => {
       if (draft.editId != null) return prev.map((s) => (s.id === draft.editId ? { ...s, type: draft.type, amount: draft.amount, reason: draft.reason } : s));
-      return [...prev, { id: Date.now() + Math.random(), type: draft.type, amount: draft.amount, reason: draft.reason }];
+      return [...prev, { id: Date.now() + Math.random(), type: draft.type, amount: draft.amount, reason: draft.reason, createdAt: Date.now() }];
     });
     setDraft(null);
   };
@@ -223,7 +229,7 @@ export default function App() {
 
   const danhSachChiText = useMemo(() => {
     if (slips.length === 0) return "(Không có phiếu thu/chi)";
-    return slips.map((s) => `${s.type === "thu" ? "+" : "−"} ${fmt(s.amount)}đ — ${s.reason?.trim() || "(không ghi lý do)"}`).join("\n");
+    return slips.map((s) => `${s.createdAt ? fmtDateTime(s.createdAt) + " — " : ""}${s.type === "thu" ? "+" : "−"} ${fmt(s.amount)}đ — ${s.reason?.trim() || "(không ghi lý do)"}`).join("\n");
   }, [slips]);
 
   const saveToNotion = useCallback(async () => {
@@ -326,8 +332,9 @@ export default function App() {
                     {draft.editId != null ? "Sửa phiếu" : draft.type === "thu" ? "Phiếu thu mới" : "Phiếu chi mới"}
                   </span>
                 </div>
-                <input inputMode="numeric" autoFocus value={draft.amount ? fmt(draft.amount) : ""} onChange={(e) => setDraft((d) => ({ ...d, amount: parseInt(onlyDigits(e.target.value) || "0", 10) || 0 }))} placeholder="Số tiền"
+                <input inputMode="numeric" autoFocus value={draft.amount ? fmt(draft.amount / 1000) : ""} onChange={(e) => setDraft((d) => ({ ...d, amount: (parseInt(onlyDigits(e.target.value) || "0", 10) || 0) * 1000 }))} placeholder="Số tiền (nghìn, vd 5 = 5.000đ)"
                   className="w-full rounded-md px-3 py-2 font-bold text-lg tabular-nums outline-none" style={{ border: `1px solid ${C.line}`, background: C.card, color: dAccent }} />
+                {draft.amount > 0 && <div className="mt-1 text-xs font-semibold tabular-nums" style={{ color: dAccent }}>= {fmt(draft.amount)}đ</div>}
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {QUICK.map((q) => (
                     <button key={q} onClick={() => setDraft((d) => ({ ...d, amount: (d.amount || 0) + q }))} className="px-2.5 py-1 rounded-md text-xs font-bold active:scale-95" style={{ background: C.card, color: dAccent, border: `1px solid ${C.line}` }}>+{kLabel(q)}</button>
@@ -350,14 +357,17 @@ export default function App() {
             {/* Danh sách phiếu đã lưu */}
             {visibleSlips.length === 0 && !draft && <p className="text-center py-8 text-sm" style={{ color: C.inkSoft }}>Chưa có phiếu nào. Thêm phiếu thu hoặc chi ở trên.</p>}
             <div className="space-y-2">
-              {visibleSlips.map((s) => {
+              {[...visibleSlips].reverse().map((s) => {
                 const isThu = s.type === "thu";
                 const accent = isThu ? C.green : C.red;
                 return (
                   <div key={s.id} className="flex items-center gap-2 p-2.5 rounded-lg" style={{ background: isThu ? C.greenSoft : C.redSoft }}>
                     {isThu ? <ArrowUpCircle size={18} style={{ color: accent }} className="shrink-0" /> : <ArrowDownCircle size={18} style={{ color: accent }} className="shrink-0" />}
                     <span className="font-bold tabular-nums shrink-0" style={{ color: accent }}>{isThu ? "+" : "−"}{fmt(s.amount)}đ</span>
-                    <span className="flex-1 text-sm truncate" style={{ color: s.reason ? C.ink : C.inkSoft }}>{s.reason || "(không ghi lý do)"}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm truncate" style={{ color: s.reason ? C.ink : C.inkSoft }}>{s.reason || "(không ghi lý do)"}</div>
+                      {s.createdAt && <div className="text-xs tabular-nums" style={{ color: C.inkSoft }}>{fmtDateTime(s.createdAt)}</div>}
+                    </div>
                     <button onClick={() => editSlip(s)} className="flex items-center gap-1 text-xs font-semibold px-2 py-1.5 rounded-md shrink-0" style={{ color: C.emerald, background: C.card, border: `1px solid ${C.line}` }}><Pencil size={13} /> Sửa</button>
                     <button onClick={() => removeSlip(s.id)} className="flex items-center gap-1 text-xs font-semibold px-2 py-1.5 rounded-md shrink-0" style={{ color: C.red, background: C.card, border: `1px solid ${C.line}` }}><Trash2 size={13} /> Xoá</button>
                   </div>
@@ -383,9 +393,10 @@ export default function App() {
             <Row label="Tổng tiền trong két" value={tongKet} />
             <Row label="Tổng thu chi" value={netThuChi} signed />
             <Row label="Két và thu chi" value={ketVaThuChi} strong color={C.emerald} />
-            <div className="mt-4 mb-1 text-sm font-semibold" style={{ color: C.inkSoft }}>Tiền báo cáo trên máy</div>
-            <input inputMode="numeric" value={reported ? fmt(reportedNum) : ""} onChange={(e) => setReported(onlyDigits(e.target.value))} placeholder="Nhập số tiền báo cáo"
+            <div className="mt-4 mb-1 text-sm font-semibold" style={{ color: C.inkSoft }}>Tiền báo cáo trên máy <span style={{ fontWeight: 400 }}>(nhập theo nghìn, vd 5 = 5.000đ)</span></div>
+            <input inputMode="numeric" value={reportedNum ? fmt(reportedNum / 1000) : ""} onChange={(e) => setReported(String((parseInt(onlyDigits(e.target.value) || "0", 10) || 0) * 1000))} placeholder="Nhập số tiền báo cáo"
               className="w-full rounded-lg px-3 py-2.5 font-bold text-lg tabular-nums outline-none" style={{ border: `1px solid ${C.line}`, background: C.paper, color: C.ink }} />
+            {reportedNum > 0 && <div className="mt-1 text-xs font-semibold tabular-nums" style={{ color: C.emerald }}>= {fmt(reportedNum)}đ</div>}
             <div className="mt-3 px-3 py-2 rounded-lg text-xs flex items-center justify-between" style={{ background: C.amberSoft, color: C.amber }}>
               <span>Trừ tiền két bổ sung mỗi lần tính</span>
               <span className="font-bold tabular-nums">− {fmt(TIEN_KET_BO_SUNG)}đ</span>
